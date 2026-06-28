@@ -12,11 +12,10 @@
  *  !!! WARNING !!!
  *  THIS IS AN EXPERIMENTAL NON-UPSTREAM MODIFIED DRIVER
  *  USE AT YOUR OWN RISK
- *
  *---------------------------------------------------------------------------
  *
  * ChangeLog:
- *      Jun.22, 2026	EXPERIMENTAL VERSION FOR CF-SR4:
+ *      Jun.28, 2026	EXPERIMENTAL VERSION FOR CF-SR4:
  *			Support non-standard ACPI PWM fan (OSPM)
  *			Add missing imports
  *			Add logging prefix for output
@@ -129,8 +128,6 @@
  *		- v0.1  start from toshiba_acpi driver written by John Belmonte
  */
 
-#include <asm-generic/errno-base.h>
-#include <asm-generic/errno.h>
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/printk.h>
@@ -156,6 +153,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/thermal.h>
 #include <linux/dmi.h>
+#include <linux/errno.h>
 
 MODULE_AUTHOR("Hiroshi Miura <miura@da-cha.org>");
 MODULE_AUTHOR("David Bronaugh <dbronaugh@linuxboxen.org>");
@@ -169,27 +167,28 @@ MODULE_LICENSE("GPL");
 
 /* Define ACPI PATHs */
 /* Lets note hotkeys */
-#define METHOD_HKEY_QUERY "HINF"
-#define METHOD_HKEY_SQTY "SQTY"
-#define METHOD_HKEY_SINF "SINF"
-#define METHOD_HKEY_SSET "SSET"
-#define METHOD_ECWR "\\_SB.ECWR"
-#define HKEY_NOTIFY 0x80
-#define ECO_MODE_OFF 0x00
-#define ECO_MODE_ON 0x80
+#define METHOD_HKEY_QUERY	"HINF"
+#define METHOD_HKEY_SQTY	"SQTY"
+#define METHOD_HKEY_SINF	"SINF"
+#define METHOD_HKEY_SSET	"SSET"
+#define METHOD_ECWR		"\\_SB.ECWR"
+#define HKEY_NOTIFY		0x80
+#define ECO_MODE_OFF		0x00
+#define ECO_MODE_ON		0x80
 
-#define ACPI_PCC_DRIVER_NAME "Panasonic Laptop Support"
-#define ACPI_PCC_DEVICE_NAME "Hotkey"
-#define ACPI_PCC_CLASS "pcc"
+#define ACPI_PCC_DRIVER_NAME	"Panasonic Laptop Support"
+#define ACPI_PCC_DEVICE_NAME	"Hotkey"
+#define ACPI_PCC_CLASS		"pcc"
 
-#define ACPI_PCC_INPUT_PHYS "panasonic/hkey0"
+#define ACPI_PCC_INPUT_PHYS	"panasonic/hkey0"
 
 /* Define fan PWM modes */
-#define ACPI_PCC_FAN_PWM_AUTO 0x00
-#define ACPI_PCC_FAN_PWM_MANUAL 0x01
-#define HWMON_PCC_FAN_PWM_AUTO 0x00
-#define HWMON_PCC_FAN_PWM_MANUAL 0x01
+#define ACPI_PCC_FAN_PWM_AUTO		0x00
+#define ACPI_PCC_FAN_PWM_MANUAL		0x01
+#define HWMON_PCC_FAN_PWM_AUTO		0x02
+#define HWMON_PCC_FAN_PWM_MANUAL	0x01
 
+/* Define quirks for this driver */
 struct quirk_entry {
 	bool has_ospm_pwm_fan;
 };
@@ -197,21 +196,20 @@ struct quirk_entry {
 /* LCD_TYPEs: 0 = Normal, 1 = Semi-transparent
    ECO_MODEs: 0x03 = off, 0x83 = on
 */
-enum SINF_BITS {
-	SINF_NUM_BATTERIES = 0,
-	SINF_LCD_TYPE,
-	SINF_AC_MAX_BRIGHT,
-	SINF_AC_MIN_BRIGHT,
-	SINF_AC_CUR_BRIGHT,
-	SINF_DC_MAX_BRIGHT,
-	SINF_DC_MIN_BRIGHT,
-	SINF_DC_CUR_BRIGHT,
-	SINF_MUTE,
-	SINF_RESERVED,
-	SINF_ECO_MODE = 0x0A,
-	SINF_CUR_BRIGHT = 0x0D,
-	SINF_STICKY_KEY = 0x80,
-};
+enum SINF_BITS { SINF_NUM_BATTERIES = 0,
+		 SINF_LCD_TYPE,
+		 SINF_AC_MAX_BRIGHT,
+		 SINF_AC_MIN_BRIGHT,
+		 SINF_AC_CUR_BRIGHT,
+		 SINF_DC_MAX_BRIGHT,
+		 SINF_DC_MIN_BRIGHT,
+		 SINF_DC_CUR_BRIGHT,
+		 SINF_MUTE,
+		 SINF_RESERVED,
+		 SINF_ECO_MODE = 0x0A,
+		 SINF_CUR_BRIGHT = 0x0D,
+		 SINF_STICKY_KEY = 0x80,
+	};
 /* R1 handles SINF_AC_CUR_BRIGHT as SINF_CUR_BRIGHT, doesn't know AC state */
 
 static int acpi_pcc_hotkey_probe(struct platform_device *pdev);
@@ -219,8 +217,11 @@ static void acpi_pcc_hotkey_remove(struct platform_device *pdev);
 static void acpi_pcc_hotkey_notify(acpi_handle handle, u32 event, void *data);
 
 static const struct acpi_device_id pcc_device_ids[] = {
-	{ "MAT0012", 0 }, { "MAT0013", 0 }, { "MAT0018", 0 },
-	{ "MAT0019", 0 }, { "", 0 },
+	{ "MAT0012", 0},
+	{ "MAT0013", 0},
+	{ "MAT0018", 0},
+	{ "MAT0019", 0},
+	{ "", 0},
 };
 MODULE_DEVICE_TABLE(acpi, pcc_device_ids);
 
@@ -266,41 +267,36 @@ static const struct key_entry panasonic_keymap[] = {
 };
 
 struct pcc_acpi {
-	acpi_handle handle;
-	unsigned long num_sifr;
-	int sticky_key;
-	int eco_mode;
-	int mute;
-	int ac_brightness;
-	int dc_brightness;
-	int current_brightness;
-	u32 *sinf;
-	struct quirk_entry *quirks;
-	struct acpi_device *device;
-	struct input_dev *input_dev;
-	struct backlight_device *backlight;
-	struct platform_device *platform;
+	acpi_handle			handle;
+	unsigned long			num_sifr;
+	int				sticky_key;
+	int				eco_mode;
+	int				mute;
+	int				ac_brightness;
+	int				dc_brightness;
+	int				current_brightness;
+	u32				*sinf;
+	struct quirk_entry		*quirks;
+	struct acpi_device		*device;
+	struct input_dev		*input_dev;
+	struct backlight_device		*backlight;
+	struct platform_device		*platform;
+	struct thermal_cooling_device	*pwm_fan_cdev;
+	struct device			*pwm_fan_hwmon;
+	struct mutex			pwm_fan_lock;
 };
 
 /*
-* Declare quirks and apply matches
-*/
-static struct quirk_entry *quirks;
+ * Declare quirks and apply matches
+ */
 
 static struct quirk_entry quirk_cf_sr4 = {
 	.has_ospm_pwm_fan = true,
 };
 
-static int dmi_matched(const struct dmi_system_id *dmi)
-{
-	pr_info("Identified laptop model '%s'\n", dmi->ident);
-	quirks = dmi->driver_data;
-	return 1;
-}
-
+/* DMI matching for quirks copied from asus-nb-wmi.c */
 static const struct dmi_system_id pcc_quirks[] = {
 	{
-		.callback = dmi_matched,
 		.ident = "Panasonic Connect Co., Ltd. CFSR4-1",
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "Panasonic Connect Co., Ltd."),
@@ -351,23 +347,19 @@ static bool panasonic_i8042_filter(unsigned char data, unsigned char str,
 static int acpi_pcc_write_sset(struct pcc_acpi *pcc, int func, int val)
 {
 	union acpi_object in_objs[] = {
-		{
-			.integer.type = ACPI_TYPE_INTEGER,
-			.integer.value = func,
-		},
-		{
-			.integer.type = ACPI_TYPE_INTEGER,
-			.integer.value = val,
-		},
+		{ .integer.type  = ACPI_TYPE_INTEGER,
+		  .integer.value = func, },
+		{ .integer.type  = ACPI_TYPE_INTEGER,
+		  .integer.value = val, },
 	};
 	struct acpi_object_list params = {
-		.count = ARRAY_SIZE(in_objs),
+		.count   = ARRAY_SIZE(in_objs),
 		.pointer = in_objs,
 	};
 	acpi_status status = AE_OK;
 
-	status = acpi_evaluate_object(pcc->handle, METHOD_HKEY_SSET, &params,
-				      NULL);
+	status = acpi_evaluate_object(pcc->handle, METHOD_HKEY_SSET,
+				      &params, NULL);
 
 	return (status == AE_OK) ? 0 : -EIO;
 }
@@ -377,8 +369,8 @@ static inline int acpi_pcc_get_sqty(struct acpi_device *device)
 	unsigned long long s;
 	acpi_status status;
 
-	status = acpi_evaluate_integer(device->handle, METHOD_HKEY_SQTY, NULL,
-				       &s);
+	status = acpi_evaluate_integer(device->handle, METHOD_HKEY_SQTY,
+				       NULL, &s);
 	if (ACPI_SUCCESS(status))
 		return s;
 	else {
@@ -390,7 +382,7 @@ static inline int acpi_pcc_get_sqty(struct acpi_device *device)
 static int acpi_pcc_retrieve_biosdata(struct pcc_acpi *pcc)
 {
 	acpi_status status;
-	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
+	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
 	union acpi_object *hkey = NULL;
 	int i;
 
@@ -473,8 +465,8 @@ static int bl_set_status(struct backlight_device *bd)
 }
 
 static const struct backlight_ops pcc_backlight_ops = {
-	.get_brightness = bl_get,
-	.update_status = bl_set_status,
+	.get_brightness	= bl_get,
+	.update_status	= bl_set_status,
 };
 
 /* returns ACPI_SUCCESS if methods to control optical drive are present */
@@ -568,6 +560,8 @@ out:
 	return result;
 }
 
+/* get OSPM fan mode */
+
 static int pcc_pwm_fan_mode_read(int *pwm_mode)
 {
 	unsigned long long state;
@@ -578,17 +572,15 @@ static int pcc_pwm_fan_mode_read(int *pwm_mode)
 	status = acpi_evaluate_integer(NULL, "\\_SB.PC00.LPCB.EC0.CEFM", NULL,
 				       &state);
 	if (ACPI_FAILURE(status)) {
-		pr_err("evaluation error _SB.PC00.LPCB.EC0.CEFM\n");
+		pr_err("error: cannot get fan mode via CEFM\n");
 		result = -EIO;
 		goto out;
 	}
 
 	/* use hwmon convention for pwm_mode */
 	if (state == ACPI_PCC_FAN_PWM_AUTO) {
-		/* 1 - EC/auto */
 		*pwm_mode = HWMON_PCC_FAN_PWM_AUTO;
 	} else if (state != 0 && state > 0) {
-		/* 2 - OSPM/software */
 		*pwm_mode = HWMON_PCC_FAN_PWM_MANUAL;
 	} else {
 		/* unknown */
@@ -596,11 +588,13 @@ static int pcc_pwm_fan_mode_read(int *pwm_mode)
 		goto out;
 	}
 
-	result = AE_OK;
+	result = 0;
 
 out:
 	return result;
 }
+
+/* set OSPM fan mode */
 
 static int pcc_pwm_fan_mode_set(int pwm_mode)
 {
@@ -618,16 +612,18 @@ static int pcc_pwm_fan_mode_set(int pwm_mode)
 	status = acpi_evaluate_object(NULL, "\\_SB.PC00.LPCB.EC0.SEFM", &input,
 				      NULL);
 	if (ACPI_FAILURE(status)) {
-		pr_err("Setting of fan mode via _SB.PC00.LPCB.EC0.SEFM evaluation failed. You may have an unsupported model.\n");
-		result = -EINVAL;
+		pr_err("error: cannot set fan mode via SEFM\n");
+		result = -EIO;
 		goto out;
 	}
 
-	result = AE_OK;
+	result = 0;
 
 out:
 	return result;
 }
+
+/* read PWM fan speed */
 
 static int pcc_pwm_fan_speed_read(int *pwm_speed)
 {
@@ -639,96 +635,108 @@ static int pcc_pwm_fan_speed_read(int *pwm_speed)
 
 
 	/* Get fan status first */
-	/* If fan is not manual, it will return bogus value */
+	/* If fan is not in manual mode, it will return a bogus value */
 	status = pcc_pwm_fan_mode_read(&pwm_mode);
-	if (ACPI_FAILURE(status)) {
-		pr_err("pcc_pwm_fan_speed_read failed to get fan status\n");
-		return -EIO;
+	if (status < 0) {
+		pr_err("%s: failed to get fan status\n", __func__);
+		result = status;
+		goto out;
 	}
 
 	if (pwm_mode == HWMON_PCC_FAN_PWM_AUTO) {
-		/* 1 - EC/auto */
-		return -ENODATA;
+		result = -ENODATA; /* Indeterminate value */
+		goto out;
 	}
 
 	/* get pwm speed */
 	status = acpi_evaluate_object(NULL, "\\_SB.PC00.LPCB.EC0.TFN1._FST",
 				      NULL, &buffer);
 	if (ACPI_FAILURE(status)) {
-		pr_err("evaluation error _SB.PC00.LPCB.EC0.TFN1._FST failed to get fan status\n");
-		return -EIO;
+		pr_err("%s: failed to get pwm speed\n", __func__);
+		result = -EIO;
+		goto out;
 	}
-	
+
 	obj = buffer.pointer;
 
+	/* the structure should have 3 values */
 	if (!obj || obj->type != ACPI_TYPE_PACKAGE || obj->package.count < 2) {
 		pr_err("Invalid _FST package structure (expected 3)\n");
 		result = -EINVAL;
 		goto out;
 	}
 
+	/* the second element should be the pwm speed as an int */
 	if (obj->package.elements[1].type != ACPI_TYPE_INTEGER) {
 		pr_err("_FST element at index 1 is not an integer\n");
 		result = -EINVAL;
 		goto out;
 	}
 
+	/* prevent out-of-bounds */
+	if (obj->package.elements[1].integer.value > 100) {
+		pr_err("_FST element at index 1 is an integer out of bounds\n");
+		result = -EINVAL;
+		goto out;
+	}
+
 	*pwm_speed = obj->package.elements[1].integer.value;
-	result = AE_OK;
+	result = 0;
 
 out:
 	kfree(buffer.pointer);
 	return result;
 }
 
+/* set PWM fan speed */
+
 static int pcc_pwm_fan_speed_set(int set_pwm_speed)
 {
-	acpi_status status;
+	struct acpi_object_list input;
+	union acpi_object param[1];
+	acpi_status fsl_status;
 	int pwm_mode;
+	int status;
 	int result;
 
-	/* Get fan status. set to manual if not yet */
+	/* Get fan status. set to manual if not set */
 	status = pcc_pwm_fan_mode_read(&pwm_mode);
-	if (ACPI_FAILURE(status)) {
-		pr_err("pcc_pwm_fan_speed_set failed to get fan status\n");
-		result = -EIO;
+	if (status < 0) {
+		pr_err("%s: failed to get fan status\n", __func__);
+		result = status;
 		goto out;
 	}
 
 	if (pwm_mode == HWMON_PCC_FAN_PWM_AUTO) {
-		status = pcc_pwm_fan_mode_set(HWMON_PCC_FAN_PWM_MANUAL);
-		if (ACPI_FAILURE(status)) {
-			pr_err("pcc_pwm_fan_speed_set: set fan PWM to manual failed\n");
-			result = -EIO;
+		status = pcc_pwm_fan_mode_set(ACPI_PCC_FAN_PWM_MANUAL);
+		if (status < 0) {
+			pr_err("%s: set fan PWM to manual failed\n", __func__);
+			result = status;
 			goto out;
 		}
 	}
 
 	/* check if within bounds */
 	if (set_pwm_speed < 0 || set_pwm_speed > 100) {
-		pr_err("evaluation error fan speed level out of bounds\n");
+		pr_err("%s: error: fan speed level out of bounds\n", __func__);
 		result = -EIO;
 		goto out;
 	}
-
-	/* actually set */
-	union acpi_object param[1];
-	struct acpi_object_list input;
 
 	param[0].type = ACPI_TYPE_INTEGER;
 	param[0].integer.value = set_pwm_speed;
 	input.count = 1; /* takes one arg */
 	input.pointer = param;
 
-	status = acpi_evaluate_object(NULL, "\\_SB.PC00.LPCB.EC0.TFN1._FSL",
+	fsl_status = acpi_evaluate_object(NULL, "\\_SB.PC00.LPCB.EC0.TFN1._FSL",
 				      &input, NULL);
-	if (ACPI_FAILURE(status)) {
+	if (ACPI_FAILURE(fsl_status)) {
 		pr_err("Setting of fan speed via ._FSL failed.\n");
-		result = -EINVAL;
+		result = -EIO;
 		goto out;
 	}
 
-	result = AE_OK;
+	result = 0;
 
 out:
 	return result;
@@ -790,8 +798,8 @@ static ssize_t mute_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static ssize_t sticky_key_show(struct device *dev,
-			       struct device_attribute *attr, char *buf)
+static ssize_t sticky_key_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -802,9 +810,8 @@ static ssize_t sticky_key_show(struct device *dev,
 	return sysfs_emit(buf, "%u\n", pcc->sticky_key);
 }
 
-static ssize_t sticky_key_store(struct device *dev,
-				struct device_attribute *attr, const char *buf,
-				size_t count)
+static ssize_t sticky_key_store(struct device *dev, struct device_attribute *attr,
+			  const char *buf, size_t count)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -822,7 +829,7 @@ static ssize_t sticky_key_store(struct device *dev,
 }
 
 static ssize_t eco_mode_show(struct device *dev, struct device_attribute *attr,
-			     char *buf)
+				char *buf)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -845,7 +852,7 @@ static ssize_t eco_mode_show(struct device *dev, struct device_attribute *attr,
 }
 
 static ssize_t eco_mode_store(struct device *dev, struct device_attribute *attr,
-			      const char *buf, size_t count)
+			  const char *buf, size_t count)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -881,7 +888,8 @@ static ssize_t eco_mode_store(struct device *dev, struct device_attribute *attr,
 		return count;
 	}
 
-	status = acpi_evaluate_object(NULL, METHOD_ECWR, &input, NULL);
+	status = acpi_evaluate_object(NULL, METHOD_ECWR,
+				       &input, NULL);
 	if (ACPI_FAILURE(status)) {
 		pr_err("%s evaluation failed\n", METHOD_ECWR);
 		return -EINVAL;
@@ -890,8 +898,8 @@ static ssize_t eco_mode_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static ssize_t ac_brightness_show(struct device *dev,
-				  struct device_attribute *attr, char *buf)
+static ssize_t ac_brightness_show(struct device *dev, struct device_attribute *attr,
+				  char *buf)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -902,8 +910,8 @@ static ssize_t ac_brightness_show(struct device *dev,
 	return sysfs_emit(buf, "%u\n", pcc->sinf[SINF_AC_CUR_BRIGHT]);
 }
 
-static ssize_t ac_brightness_store(struct device *dev,
-				   struct device_attribute *attr,
+
+static ssize_t ac_brightness_store(struct device *dev, struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
@@ -921,8 +929,8 @@ static ssize_t ac_brightness_store(struct device *dev,
 	return count;
 }
 
-static ssize_t dc_brightness_show(struct device *dev,
-				  struct device_attribute *attr, char *buf)
+static ssize_t dc_brightness_show(struct device *dev, struct device_attribute *attr,
+				  char *buf)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -933,8 +941,7 @@ static ssize_t dc_brightness_show(struct device *dev,
 	return sysfs_emit(buf, "%u\n", pcc->sinf[SINF_DC_CUR_BRIGHT]);
 }
 
-static ssize_t dc_brightness_store(struct device *dev,
-				   struct device_attribute *attr,
+static ssize_t dc_brightness_store(struct device *dev, struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
@@ -952,8 +959,8 @@ static ssize_t dc_brightness_store(struct device *dev,
 	return count;
 }
 
-static ssize_t current_brightness_show(struct device *dev,
-				       struct device_attribute *attr, char *buf)
+static ssize_t current_brightness_show(struct device *dev, struct device_attribute *attr,
+				       char *buf)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
 	struct pcc_acpi *pcc = acpi_driver_data(acpi);
@@ -964,8 +971,7 @@ static ssize_t current_brightness_show(struct device *dev,
 	return sysfs_emit(buf, "%u\n", pcc->sinf[SINF_CUR_BRIGHT]);
 }
 
-static ssize_t current_brightness_store(struct device *dev,
-					struct device_attribute *attr,
+static ssize_t current_brightness_store(struct device *dev, struct device_attribute *attr,
 					const char *buf, size_t count)
 {
 	struct acpi_device *acpi = to_acpi_device(dev);
@@ -996,7 +1002,7 @@ static ssize_t cdpower_show(struct device *dev, struct device_attribute *attr,
 }
 
 static ssize_t cdpower_store(struct device *dev, struct device_attribute *attr,
-			     const char *buf, size_t count)
+			   const char *buf, size_t count)
 {
 	int err, val;
 
@@ -1017,8 +1023,7 @@ static DEVICE_ATTR_RW(dc_brightness);
 static DEVICE_ATTR_RW(current_brightness);
 static DEVICE_ATTR_RW(cdpower);
 
-static umode_t pcc_sysfs_is_visible(struct kobject *kobj,
-				    struct attribute *attr, int idx)
+static umode_t pcc_sysfs_is_visible(struct kobject *kobj, struct attribute *attr, int idx)
 {
 	struct device *dev = kobj_to_dev(kobj);
 	struct acpi_device *acpi = to_acpi_device(dev);
@@ -1037,17 +1042,22 @@ static umode_t pcc_sysfs_is_visible(struct kobject *kobj,
 }
 
 static struct attribute *pcc_sysfs_entries[] = {
-	&dev_attr_numbatt.attr,	      &dev_attr_lcdtype.attr,
-	&dev_attr_mute.attr,	      &dev_attr_sticky_key.attr,
-	&dev_attr_eco_mode.attr,      &dev_attr_ac_brightness.attr,
-	&dev_attr_dc_brightness.attr, &dev_attr_current_brightness.attr,
-	&dev_attr_cdpower.attr,	      NULL,
+	&dev_attr_numbatt.attr,
+	&dev_attr_lcdtype.attr,
+	&dev_attr_mute.attr,
+	&dev_attr_sticky_key.attr,
+	&dev_attr_eco_mode.attr,
+	&dev_attr_ac_brightness.attr,
+	&dev_attr_dc_brightness.attr,
+	&dev_attr_current_brightness.attr,
+	&dev_attr_cdpower.attr,
+	NULL,
 };
 
 static const struct attribute_group pcc_attr_group = {
-	.name = NULL, /* put in device directory */
-	.attrs = pcc_sysfs_entries,
-	.is_visible = pcc_sysfs_is_visible,
+	.name		= NULL,		/* put in device directory */
+	.attrs		= pcc_sysfs_entries,
+	.is_visible	= pcc_sysfs_is_visible,
 };
 
 /* hwmon */
@@ -1056,85 +1066,167 @@ static const struct hwmon_channel_info *const pcc_pwm_fan_hwmon_info[] = {
 	HWMON_CHANNEL_INFO(pwm, HWMON_PWM_INPUT | HWMON_PWM_ENABLE), NULL
 };
 
+static int pcc_pwm_fan_hwmon_speed_read(struct pcc_acpi *pcc, long *val)
+{
+	int pwm_speed;
+	int result;
+	int status;
+
+	mutex_lock(&pcc->pwm_fan_lock);
+
+	status = pcc_pwm_fan_speed_read(&pwm_speed);
+	if (status < 0) {
+		result = status;
+		goto out_unlock;
+	}
+
+	/* protect against out-of-bounds */
+	if (pwm_speed < 0 || pwm_speed > 100) {
+		result = -EINVAL;
+		goto out_unlock;
+	}
+
+	*val = (pwm_speed * 255) / 100;
+	result = 0;
+
+out_unlock:
+	mutex_unlock(&pcc->pwm_fan_lock);
+	return result;
+}
+
+static int pcc_pwm_fan_hwmon_mode_read(struct pcc_acpi *pcc, long *val)
+{
+	int pwm_mode;
+	int result;
+	int status;
+
+	mutex_lock(&pcc->pwm_fan_lock);
+
+	status = pcc_pwm_fan_mode_read(&pwm_mode);
+	if (status < 0) {
+		pr_err("%s: failed to get fan pwm mode\n", __func__);
+		result = status;
+		goto out_unlock;
+	}
+	switch (pwm_mode) {
+	case HWMON_PCC_FAN_PWM_AUTO:
+		*val = HWMON_PCC_FAN_PWM_AUTO;
+		result = 0;
+		break;
+	case HWMON_PCC_FAN_PWM_MANUAL:
+		*val = HWMON_PCC_FAN_PWM_MANUAL;
+		result = 0;
+		break;
+	default:
+		result = -EINVAL;
+		break;
+	}
+
+out_unlock:
+	mutex_unlock(&pcc->pwm_fan_lock);
+	return result;
+}
+
 static int pcc_pwm_fan_hwmon_read(struct device *dev,
 				  enum hwmon_sensor_types type, u32 attr,
 				  int channel, long *val)
 {
-	acpi_status status;
-	int pwm_speed;
-	int pwm_mode;
+	struct pcc_acpi *pcc;
+
+	pcc = dev_get_drvdata(dev);
 
 	if (type != hwmon_pwm)
 		return -EOPNOTSUPP;
 
 	switch (attr) {
 	case hwmon_pwm_input:
-		status = pcc_pwm_fan_speed_read(&pwm_speed);
-		if (ACPI_FAILURE(status)) {
-			pr_err("pcc_pwm_fan_hwmon_read failed to get fan pwm speed\n");
-			return -ENODATA;
-		}
-		*val = (pwm_speed * 255) / 100;
-		//pr_info("raw hwmon pwm is %d\n", pwm_speed);
-		return 0;
+		return pcc_pwm_fan_hwmon_speed_read(pcc, val);
 	case hwmon_pwm_enable:
-		status = pcc_pwm_fan_mode_read(&pwm_mode);
-		if (ACPI_FAILURE(status)) {
-			pr_err("pcc_pwm_fan_hwmon_read failed to get fan pwm mode\n");
-			return -ENODATA;
-		}
-		if (pwm_mode == HWMON_PCC_FAN_PWM_AUTO) {
-			*val = HWMON_PCC_FAN_PWM_AUTO;
-		} else if (pwm_mode == HWMON_PCC_FAN_PWM_MANUAL) {
-			*val = HWMON_PCC_FAN_PWM_MANUAL;
-		} else {
-			// Invalid value
-			return -EIO;
-		}
-		return 0;
+		return pcc_pwm_fan_hwmon_mode_read(pcc, val);
 	default:
 		return -EOPNOTSUPP;
 	}
+}
+
+static int pcc_pwm_fan_hwmon_mode_set(struct pcc_acpi *pcc, long val)
+{
+	int result;
+
+	switch (val) {
+	case HWMON_PCC_FAN_PWM_AUTO:
+		mutex_lock(&pcc->pwm_fan_lock);
+		result = pcc_pwm_fan_mode_set(ACPI_PCC_FAN_PWM_AUTO);
+		goto out_unlock;
+	case HWMON_PCC_FAN_PWM_MANUAL:
+		mutex_lock(&pcc->pwm_fan_lock);
+		result = pcc_pwm_fan_mode_set(ACPI_PCC_FAN_PWM_MANUAL);
+		goto out_unlock;
+	default:
+		result = -EINVAL;
+		goto out;
+	}
+
+out_unlock:
+	mutex_unlock(&pcc->pwm_fan_lock);
+out:
+	return result;
+}
+
+static int pcc_pwm_fan_hwmon_speed_set(struct pcc_acpi *pcc, long val)
+{
+	int pwm_speed_vendor_val;
+	int pwm_mode;
+	int status;
+	int result;
+
+	val = clamp_val(val, 0, 255);
+	pwm_speed_vendor_val = (val * 100) / 255;
+
+	mutex_lock(&pcc->pwm_fan_lock);
+
+	/* check first if manual control is enabled */
+	status = pcc_pwm_fan_mode_read(&pwm_mode);
+	if (status < 0) {
+		pr_err("%s: failed to get fan pwm mode\n", __func__);
+		result = status;
+		goto out_unlock;
+	}
+
+	/* do not allow settings speeds if not manual mode */
+	if (pwm_mode != HWMON_PCC_FAN_PWM_MANUAL) {
+		result = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
+	status = pcc_pwm_fan_speed_set(pwm_speed_vendor_val);
+	if (status < 0) {
+		pr_err("%s: failed to set fan pwm\n", __func__);
+		result = status;
+		goto out_unlock;
+	}
+	result = 0;
+
+out_unlock:
+	mutex_unlock(&pcc->pwm_fan_lock);
+	return result;
 }
 
 static int pcc_pwm_fan_hwmon_write(struct device *dev,
 				   enum hwmon_sensor_types type, u32 attr,
 				   int channel, long val)
 {
-	int pwm_speed_vendor_val;
-	acpi_status status;
+	struct pcc_acpi *pcc;
+
+	pcc = dev_get_drvdata(dev);
 
 	if (type != hwmon_pwm)
 		return -EOPNOTSUPP;
 
 	switch (attr) {
 	case hwmon_pwm_enable:
-		if (val == HWMON_PCC_FAN_PWM_AUTO) {
-			status = pcc_pwm_fan_mode_set(HWMON_PCC_FAN_PWM_AUTO);
-			if (ACPI_FAILURE(status)) {
-				pr_err("pcc_pwm_fan_hwmon_write failed to set fan to auto mode\n");
-				return -EIO;
-			}
-			return 0;
-		} else if (val == HWMON_PCC_FAN_PWM_MANUAL) {
-			status = pcc_pwm_fan_mode_set(HWMON_PCC_FAN_PWM_MANUAL);
-			if (ACPI_FAILURE(status)) {
-				pr_err("pcc_pwm_fan_hwmon_write failed to set fan to manual mode\n");
-				return -EIO;
-			}
-			return 0;
-		}
-		return -EINVAL;
+		return pcc_pwm_fan_hwmon_mode_set(pcc, val);
 	case hwmon_pwm_input:
-		val = clamp_val(val, 0, 255);
-		pwm_speed_vendor_val = (val * 100) / 255;
-
-		status = pcc_pwm_fan_speed_set(pwm_speed_vendor_val);
-		if (ACPI_FAILURE(status)) {
-			pr_err("pcc_pwm_fan_hwmon_write failed to set fan pwm\n");
-			return -EIO;
-		}
-		return 0;
+		return pcc_pwm_fan_hwmon_speed_set(pcc, val);
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -1172,51 +1264,78 @@ static int
 pcc_pwm_fan_thermal_get_current_pwm(struct thermal_cooling_device *cdev,
 				    unsigned long *state)
 {
-	acpi_status status;
+	struct pcc_acpi *pcc;
 	int current_pwm;
 	int pwm_mode;
+	int result;
+	int status;
+
+	pcc = cdev->devdata;
+
+	mutex_lock(&pcc->pwm_fan_lock);
 
 	status = pcc_pwm_fan_mode_read(&pwm_mode);
-	if (ACPI_FAILURE(status)) {
-		pr_err("pcc_pwm_fan_thermal_get_current_pwm failed to get fan pwm mode\n");
-		return -ENODATA;
+	if (status < 0) {
+		pr_err("%s: failed to get fan pwm mode\n", __func__);
+		result = status;
+		goto out;
 	}
 	if (pwm_mode == HWMON_PCC_FAN_PWM_AUTO) {
 		*state = 100; /* Return failsafe value on EC mode */
-		return 0;
+		result = 0;
+		goto out;
 	}
 
 	status = pcc_pwm_fan_speed_read(&current_pwm);
-	if (ACPI_FAILURE(status)) {
-		pr_err("pcc_pwm_fan_thermal_get_current_pwm failed to get fan pwm mode\n");
-		return -ENODATA;
+	if (status < 0) {
+		result = status; /* pass error code */
+		goto out;
 	}
 
-	if (current_pwm > 100) {
+	if (current_pwm > 100)
 		current_pwm = 100;
-	}
 	if (current_pwm < 0) {
-		return -EINVAL;
+		result = -EINVAL;
+		goto out;
 	}
-	*state = current_pwm;
 
-	return 0;
+	*state = current_pwm;
+	result = 0;
+
+out:
+	mutex_unlock(&pcc->pwm_fan_lock);
+	return result;
 }
 static int pcc_pwm_fan_thermal_set_fan_pwm(struct thermal_cooling_device *cdev,
 					   unsigned long state)
 {
-	acpi_status status;
+	struct pcc_acpi *pcc;
+	int status;
 	int set_pwm;
-	if (state > 100 || state < 0) {
-		return -EINVAL;
+	int result;
+
+	pcc = cdev->devdata;
+
+	mutex_lock(&pcc->pwm_fan_lock);
+
+	if (state > 100) {
+		result = -EINVAL;
+		goto out;
 	}
+
 	set_pwm = state;
 	status = pcc_pwm_fan_speed_set(set_pwm);
-	if (ACPI_FAILURE(status)) {
-		pr_err("pcc_pwm_fan_thermal_set_fan_pwm failed to set fan speed pwm\n");
-		return -EIO;
+	if (status < 0) {
+		pr_err("%s: failed to set fan speed pwm\n", __func__);
+		result = status;
+		goto out;
 	}
-	return 0;
+
+	result = 0;
+
+out:
+	mutex_unlock(&pcc->pwm_fan_lock);
+	return result;
 }
 static const struct thermal_cooling_device_ops pcc_pwm_fan_cdev_ops = {
 	.get_max_state = pcc_pwm_fan_thermal_max_state,
@@ -1235,8 +1354,8 @@ static void acpi_pcc_generate_keyinput(struct pcc_acpi *pcc)
 	unsigned int key;
 	unsigned int updown;
 
-	rc = acpi_evaluate_integer(pcc->handle, METHOD_HKEY_QUERY, NULL,
-				   &result);
+	rc = acpi_evaluate_integer(pcc->handle, METHOD_HKEY_QUERY,
+				   NULL, &result);
 	if (ACPI_FAILURE(rc)) {
 		pr_err("error getting hotkey status\n");
 		return;
@@ -1250,16 +1369,15 @@ static void acpi_pcc_generate_keyinput(struct pcc_acpi *pcc)
 		if (updown)
 			sleep_keydown_seen = 1;
 		if (!sleep_keydown_seen)
-			sparse_keymap_report_event(hotk_input_dev, key, 0x80,
-						   false);
+			sparse_keymap_report_event(hotk_input_dev,
+					key, 0x80, false);
 	}
 
 	/*
 	 * Don't report brightness key-presses if they are also reported
 	 * by the ACPI video bus.
 	 */
-	if ((key == 1 || key == 2) &&
-	    acpi_video_handles_brightness_key_presses())
+	if ((key == 1 || key == 2) && acpi_video_handles_brightness_key_presses())
 		return;
 
 	if (!sparse_keymap_report_event(hotk_input_dev, key, updown, false))
@@ -1296,8 +1414,9 @@ static void pcc_register_optd_notifier(struct pcc_acpi *pcc, char *node)
 	status = acpi_get_handle(NULL, node, &handle);
 
 	if (ACPI_SUCCESS(status)) {
-		status = acpi_install_notify_handler(handle, ACPI_SYSTEM_NOTIFY,
-						     pcc_optd_notify, pcc);
+		status = acpi_install_notify_handler(handle,
+				ACPI_SYSTEM_NOTIFY,
+				pcc_optd_notify, pcc);
 		if (ACPI_FAILURE(status))
 			pr_err("Failed to register notify on %s\n", node);
 	}
@@ -1311,10 +1430,12 @@ static void pcc_unregister_optd_notifier(struct pcc_acpi *pcc, char *node)
 	status = acpi_get_handle(NULL, node, &handle);
 
 	if (ACPI_SUCCESS(status)) {
-		status = acpi_remove_notify_handler(handle, ACPI_SYSTEM_NOTIFY,
-						    pcc_optd_notify);
+		status = acpi_remove_notify_handler(handle,
+				ACPI_SYSTEM_NOTIFY,
+				pcc_optd_notify);
 		if (ACPI_FAILURE(status))
-			pr_err("Error removing optd notify handler %s\n", node);
+			pr_err("Error removing optd notify handler %s\n",
+					node);
 	}
 }
 
@@ -1349,7 +1470,7 @@ static int acpi_pcc_init_input(struct pcc_acpi *pcc)
 	pcc->input_dev = input_dev;
 	return 0;
 
-err_free_dev:
+ err_free_dev:
 	input_free_device(input_dev);
 	return error;
 }
@@ -1369,8 +1490,7 @@ static int acpi_pcc_hotkey_resume(struct device *dev)
 	acpi_pcc_write_sset(pcc, SINF_AC_CUR_BRIGHT, pcc->ac_brightness);
 	acpi_pcc_write_sset(pcc, SINF_DC_CUR_BRIGHT, pcc->dc_brightness);
 	if (pcc->num_sifr > SINF_CUR_BRIGHT)
-		acpi_pcc_write_sset(pcc, SINF_CUR_BRIGHT,
-				    pcc->current_brightness);
+		acpi_pcc_write_sset(pcc, SINF_CUR_BRIGHT, pcc->current_brightness);
 
 	return 0;
 }
@@ -1378,11 +1498,9 @@ static int acpi_pcc_hotkey_resume(struct device *dev)
 
 static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 {
-	struct thermal_cooling_device *cdev;
 	const struct dmi_system_id *dmi_id;
 	struct backlight_properties props;
 	struct acpi_device *device;
-	struct device *hwmon_dev;
 	struct pcc_acpi *pcc;
 	int num_sifr, result;
 
@@ -1397,8 +1515,7 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 	 * Accesses to higher SINF entries are checked against num_sifr.
 	 */
 	if (num_sifr <= SINF_DC_CUR_BRIGHT || num_sifr > 255) {
-		pr_err("num_sifr %d out of range %d - 255\n", num_sifr,
-		       SINF_DC_CUR_BRIGHT + 1);
+		pr_err("num_sifr %d out of range %d - 255\n", num_sifr, SINF_DC_CUR_BRIGHT + 1);
 		return -ENODEV;
 	}
 
@@ -1428,8 +1545,8 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 	strscpy(acpi_device_class(device), ACPI_PCC_CLASS);
 
 	/*
-	* Perform quirk detection
-	*/
+	 * Perform quirk detection
+	 */
 	dmi_id = dmi_first_match(pcc_quirks);
 	if (dmi_id) {
 		pcc->quirks = dmi_id->driver_data;
@@ -1456,16 +1573,15 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 		props.type = BACKLIGHT_PLATFORM;
 		props.max_brightness = pcc->sinf[SINF_AC_MAX_BRIGHT];
 
-		pcc->backlight = backlight_device_register(
-			"panasonic", NULL, pcc, &pcc_backlight_ops, &props);
+		pcc->backlight = backlight_device_register("panasonic", NULL, pcc,
+							   &pcc_backlight_ops, &props);
 		if (IS_ERR(pcc->backlight)) {
 			result = PTR_ERR(pcc->backlight);
 			goto out_input;
 		}
 
 		/* read the initial brightness setting from the hardware */
-		pcc->backlight->props.brightness =
-			pcc->sinf[SINF_AC_CUR_BRIGHT];
+		pcc->backlight->props.brightness = pcc->sinf[SINF_AC_CUR_BRIGHT];
 	}
 
 	/* Reset initial sticky key mode since the hardware register state is not consistent */
@@ -1493,14 +1609,14 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 
 	/* optical drive initialization */
 	if (ACPI_SUCCESS(check_optd_present())) {
-		pcc->platform = platform_device_register_simple(
-			"panasonic", PLATFORM_DEVID_NONE, NULL, 0);
+		pcc->platform = platform_device_register_simple("panasonic",
+			PLATFORM_DEVID_NONE, NULL, 0);
 		if (IS_ERR(pcc->platform)) {
 			result = PTR_ERR(pcc->platform);
 			goto out_notify_handler;
 		}
 		result = device_create_file(&pcc->platform->dev,
-					    &dev_attr_cdpower);
+			&dev_attr_cdpower);
 		if (result)
 			goto out_platform;
 
@@ -1511,25 +1627,40 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 
 	i8042_install_filter(panasonic_i8042_filter, NULL);
 
-	/* has_ospm_pwm_fan */
+	/* skip if no quirks */
+	if (!pcc->quirks)
+		goto out_no_quirks;
+
+	/* has_ospm_pwm_fan - add hwmon and thermal if present */
 	if (pcc->quirks->has_ospm_pwm_fan) {
-		pr_info("OSPM PWN fan quirk: applying hwmon for for %s\n", dmi_id->ident);
-		hwmon_dev = devm_hwmon_device_register_with_info(
-			&pdev->dev, "panasonic_pwm_fan", NULL,
+		mutex_init(&pcc->pwm_fan_lock);
+
+		pr_info("has_ospm_pwm_fan quirk: adding hwmon for %s\n", dmi_id->ident);
+
+		pcc->pwm_fan_hwmon = hwmon_device_register_with_info(
+			&pdev->dev, "panasonic_pwm_fan", pcc,
 			&pcc_pwm_fan_hwmon_chip_info, NULL);
-		if (IS_ERR(hwmon_dev)) {
-			pr_err("PCC PWM Fan: Failed to register hwmon device\n");
-			return PTR_ERR(hwmon_dev);
+		if (IS_ERR(pcc->pwm_fan_hwmon)) {
+			pr_err("has_ospm_pwm_fan: Failed to register hwmon device\n");
+			/* not a critical error. just skip if error */
+			pcc->pwm_fan_hwmon = NULL;
 		}
 
-		pr_info("OSPM PWN fan quirk: applying thermal for for %s\n", dmi_id->ident);
-		cdev = thermal_cooling_device_register(
-			"Panasonic_PWM_Fan", NULL, &pcc_pwm_fan_cdev_ops);
-		if (IS_ERR(cdev)) {
-			pr_warn("PCC: Failed to register cdev!\n");
+		/* proceed with thermal */
+		pr_info("has_ospm_pwm_fan quirk: adding thermal for %s\n", dmi_id->ident);
+		pcc->pwm_fan_cdev = thermal_cooling_device_register(
+			"Panasonic_PWM_Fan", pcc, &pcc_pwm_fan_cdev_ops);
+		if (IS_ERR(pcc->pwm_fan_cdev)) {
+			pr_warn("has_ospm_pwm_fan: Failed to register thermal cdev\n");
+			pcc->pwm_fan_cdev = NULL;
 		}
+
+		/* cleanup: destroy mutex if both hwmon and thermal failed */
+		if (!pcc->pwm_fan_hwmon && !pcc->pwm_fan_cdev)
+			mutex_destroy(&pcc->pwm_fan_lock);
 	}
 
+out_no_quirks:
 	return 0;
 
 out_platform:
@@ -1556,6 +1687,13 @@ static void acpi_pcc_hotkey_remove(struct platform_device *pdev)
 {
 	struct acpi_device *device = ACPI_COMPANION(&pdev->dev);
 	struct pcc_acpi *pcc = acpi_driver_data(device);
+
+	if (pcc->pwm_fan_hwmon)
+		hwmon_device_unregister(pcc->pwm_fan_hwmon);
+	if (pcc->pwm_fan_cdev)
+		thermal_cooling_device_unregister(pcc->pwm_fan_cdev);
+	if (pcc->pwm_fan_hwmon || pcc->pwm_fan_cdev)
+		mutex_destroy(&pcc->pwm_fan_lock);
 
 	i8042_remove_filter(panasonic_i8042_filter);
 
