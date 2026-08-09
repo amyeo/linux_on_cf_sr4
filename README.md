@@ -13,10 +13,10 @@ For the SR4, it adds cool (firmware default), quiet and performance modes.
 
 DMI Product Name | DMI Vendor | Profiles
 --- | --- | ---
-"CFSR4-1" | "Panasonic Connect Co., Ltd." | "cool, quiet, performance"
-"CFQV9-1" | "Panasonic Corporation" | "balanced, performance"
-"CFSV8-2" | "Panasonic Corporation" | "balanced, performance"
-"CFRZ6-2" | "Panasonic Corporation" | "balanced, performance"
+"CFSR4-1" | "Panasonic Connect Co., Ltd." | cool, quiet, performance
+"CFQV9-1" | "Panasonic Corporation" | balanced, performance
+"CFSV8-2" | "Panasonic Corporation" | balanced, performance
+"CFRZ6-2" | "Panasonic Corporation" | balanced, performance
 
 ## Usage
 
