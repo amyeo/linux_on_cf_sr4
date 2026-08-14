@@ -272,6 +272,8 @@ static const struct key_entry panasonic_keymap[] = {
 	{ KE_KEY, 41, { KEY_MACRO9 } },
 	{ KE_KEY, 42, { KEY_MACRO10 } },
 	{ KE_KEY, 43, { KEY_MACRO11 } },
+	{ KE_KEY, 48, { KEY_FN } },
+	{ KE_IGNORE, 193, { KEY_RESERVED } }, /* Charger (un)plug event */
 	{ KE_END, 0 }
 };
 
@@ -991,6 +993,15 @@ static void acpi_pcc_generate_keyinput(struct pcc_acpi *pcc)
 		if (!sleep_keydown_seen)
 			sparse_keymap_report_event(hotk_input_dev,
 					key, 0x80, false);
+	}
+
+	/* fn key up and down events are reported */
+	if (key == 48)
+		updown = 1;
+
+	if (key == 49) {
+		key = 48;
+		updown = 0;
 	}
 
 	/*
