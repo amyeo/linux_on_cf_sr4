@@ -1,0 +1,6 @@
+modules.order
+panasonic-laptop.ko
+panasonic-laptop.mod
+panasonic-laptop.mod.c
+panasonic-laptop.mod.o
+panasonic-laptop.o
