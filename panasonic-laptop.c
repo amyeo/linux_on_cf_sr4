@@ -153,7 +153,7 @@ MODULE_AUTHOR("David Bronaugh <dbronaugh@linuxboxen.org>");
 MODULE_AUTHOR("Harald Welte <laforge@gnumonks.org>");
 MODULE_AUTHOR("Martin Lucina <mato@kotelna.sk>");
 MODULE_AUTHOR("Kenneth Chan <kenneth.t.chan@gmail.com>");
-MODULE_DESCRIPTION("ACPI HotKey driver for Panasonic Let's Note laptops");
+MODULE_DESCRIPTION("EXPERIMENTAL ACPI HotKey driver for Panasonic Let's Note laptops");
 MODULE_LICENSE("GPL");
 
 #define LOGPREFIX "pcc_acpi: "
@@ -1278,9 +1278,47 @@ static int pcc_platform_profile_set(struct device *dev, enum platform_profile_op
 	return -EINVAL;
 }
 
+static int acpi_pcc_platform_profile_detect(struct pcc_acpi *pcc)
+{
+	unsigned long long state;
+	acpi_status status;
+
+	/* probe read values */
+	status = acpi_evaluate_integer(pcc->ec_handle, "CEFM", NULL,
+				       &state);
+	if (ACPI_FAILURE(status))
+		return -EIO;
+
+	status = acpi_evaluate_integer(pcc->ec_handle, "EPLE", NULL,
+				       &state);
+	if (ACPI_FAILURE(status))
+		return -EIO;
+
+	/* probe write methods */
+	if (!acpi_has_method(pcc->ec_handle, "SEFM"))
+		return -EIO;
+
+	if (!acpi_has_method(pcc->ec_handle, "SEPL"))
+		return -EIO;
+
+	return 0;
+}
+
 static int pcc_platform_profile_probe(void *drvdata, unsigned long *choices)
 {
 	struct pcc_acpi *pcc = drvdata;
+
+	if (acpi_pcc_platform_profile_detect(pcc)) {
+		pr_err("error probing platform profiles: missing ACPI support\n");
+		return -ENODEV;
+	}
+
+	/* for testing: set defaults when not specified */
+	if (!pcc->quirks || !pcc->quirks->use_platform_profiles) {
+		set_bit(PLATFORM_PROFILE_BALANCED, choices);
+		set_bit(PLATFORM_PROFILE_PERFORMANCE, choices);
+		return 0;
+	}
 
 	for (enum platform_profile_option pp_opt = 0;
 	     pp_opt < PLATFORM_PROFILE_LAST;
@@ -1363,6 +1401,8 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 	struct acpi_device *device;
 	struct pcc_acpi *pcc;
 	int num_sifr, result;
+
+	pr_info("you are using the experimental version\n");
 
 	device = ACPI_COMPANION(&pdev->dev);
 	if (!device)
@@ -1476,11 +1516,9 @@ static int acpi_pcc_hotkey_probe(struct platform_device *pdev)
 
 	i8042_install_filter(panasonic_i8042_filter, NULL);
 
-	if (pcc->quirks && pcc->quirks->use_platform_profiles) {
-		result = acpi_pcc_platform_profile_probe(pcc, pdev);
-		if (result)
-			pr_warn("error occurred setting up platform profiles\n");
-	}
+	result = acpi_pcc_platform_profile_probe(pcc, pdev);
+	if (result)
+		pr_warn("error occurred setting up platform profiles\n");
 
 	return 0;
 
