@@ -1218,6 +1218,21 @@ static int pcc_platform_profile_get(struct device *dev, enum platform_profile_op
 	status = pcc_tdp_mode_get(pcc, &tdp_mode);
 	if (status)
 		return status;
+	
+	/* for testing: balanced and performance default */
+	if (!pcc->quirks || !pcc->quirks->use_platform_profiles) {
+		if (fan_mode == PCC_FAN_MODE_ACTIVE && tdp_mode == PCC_TDP_MODE_LOCKED) {
+			*profile = PLATFORM_PROFILE_BALANCED;
+			return 0;
+		}
+		if (fan_mode == PCC_FAN_MODE_ACTIVE && tdp_mode == PCC_TDP_MODE_UNLOCKED) {
+			*profile = PLATFORM_PROFILE_PERFORMANCE;
+			return 0;
+		}
+
+		*profile = PLATFORM_PROFILE_CUSTOM;
+		return 0;
+	}
 
 	for (enum platform_profile_option pp_opt = 0;
 	     pp_opt < PLATFORM_PROFILE_LAST;
@@ -1268,6 +1283,22 @@ static int pcc_platform_profile_set(struct device *dev, enum platform_profile_op
 {
 	struct pcc_acpi *pcc = dev_get_drvdata(dev);
 	struct pcc_platform_profile pcc_profile;
+
+	/* for testing: balanced and performance default */
+	if (!pcc->quirks || !pcc->quirks->use_platform_profiles) {
+		switch(profile){
+			case PLATFORM_PROFILE_BALANCED:
+				return pcc_platform_profile_set_profile(pcc,
+									PCC_FAN_MODE_ACTIVE,
+									PCC_TDP_MODE_LOCKED);
+			case PLATFORM_PROFILE_PERFORMANCE:
+				return pcc_platform_profile_set_profile(pcc,
+									PCC_FAN_MODE_ACTIVE,
+									PCC_TDP_MODE_UNLOCKED);
+			default:
+				return -EINVAL;
+		}
+	}
 
 	pcc_profile = pcc->quirks->platform_profiles[profile];
 	if (pcc_profile.fan_mode && pcc_profile.tdp_mode)
