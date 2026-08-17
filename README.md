@@ -18,6 +18,11 @@ DMI Product Name | DMI Vendor | Profiles
 "CFSV8-2" | "Panasonic Corporation" | balanced, performance
 "CFRZ6-2" | "Panasonic Corporation" | balanced, performance
 
+## Enchancements
+
+ - 0x00c1 charger event registered (prevent dmesg spam)
+ - 0x0030 and 0x0031 fn keyup/down events registered (prevent dmesg spam)
+
 ## Usage
 
 ```
