@@ -1,0 +1,15 @@
+modules.order
+panasonic-laptop.ko
+panasonic-laptop.mod
+panasonic-laptop.mod.c
+panasonic-laptop.mod.o
+panasonic-laptop.o
+Module.symvers
+..module-common.o.cmd
+.Module.symvers.cmd
+.module-common.o
+.modules.order.cmd
+.panasonic-laptop.ko.cmd
+.panasonic-laptop.mod.cmd
+.panasonic-laptop.mod.o.cmd
+.panasonic-laptop.o.cmd
